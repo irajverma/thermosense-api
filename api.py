@@ -4,10 +4,10 @@ import pandas as pd
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+# from transformers import GPT2LMHeadModel, GPT2Tokenizer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import OneHotEncoder
-import torch
+# import torch
 import joblib
 
 app = FastAPI(title="ThermoSense ML + GPT-2 Advisory")
@@ -30,11 +30,11 @@ y = df[target]
 model = RandomForestRegressor(n_estimators=100, random_state=42)
 model.fit(X, y)
 
-# GPT-2 setup
-tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-tokenizer.pad_token = tokenizer.eos_token
-gpt2_model = GPT2LMHeadModel.from_pretrained("gpt2")
-gpt2_model.eval()
+# # GPT-2 setup
+# tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+# tokenizer.pad_token = tokenizer.eos_token
+# gpt2_model = GPT2LMHeadModel.from_pretrained("gpt2")
+# gpt2_model.eval()
 
 FEW_SHOT_PROMPT = """You are a battery safety advisor. Here are some examples:
 
@@ -73,38 +73,27 @@ class SensorInput(BaseModel):
     device_state: str
 
 # ========== Helper Functions ==========
+import requests
+
 def generate_advice_with_gpt2(battery_temp, ambient_temp, device_state, pred_impact):
-    prompt = FEW_SHOT_PROMPT.format(
-        battery_temp=battery_temp,
-        ambient_temp=ambient_temp,
-        device_state=device_state.capitalize(),
-        pred_impact=pred_impact
-    )
-    inputs = tokenizer(prompt, return_tensors="pt", padding=True)
-    with torch.no_grad():
-        output = gpt2_model.generate(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            max_length=inputs["input_ids"].shape[1] + 40,
-            do_sample=True,
-            top_p=0.9,
-            temperature=0.8,
-            pad_token_id=tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            num_return_sequences=1
+    try:
+        response = requests.post(
+            "https://<your-username>-<space-name>.hf.space/api/advice",  # replace with your Space URL and endpoint
+            json={
+                "battery_temp": battery_temp,
+                "ambient_temp": ambient_temp,
+                "device_state": device_state,
+                "pred_impact": pred_impact
+            },
+            timeout=15
         )
-    decoded = tokenizer.decode(output[0], skip_special_tokens=True)
-    advice = decoded.split("Advice:")[-1].strip()
-    if "." in advice:
-        advice = advice.split(".")[0] + "."
-    if not advice or len(advice) < 10:
-        if pred_impact > 0.07:
-            advice = "Critical: High battery stress detected. Take immediate action to cool device."
-        elif pred_impact > 0.04:
-            advice = "Warning: Moderate battery stress. Consider reducing usage."
+        if response.status_code == 200:
+            return response.json().get("natural_language_tip", "Advice unavailable.")
         else:
-            advice = "Normal: Battery conditions are within safe limits."
-    return advice
+            return "⚠️ GPT-2 service unavailable. Using fallback logic."
+    except Exception as e:
+        print("Error contacting GPT-2 API:", e)
+        return "⚠️ GPT-2 service failed. Using fallback."
 
 def get_alert_level(impact):
     if impact > 0.07:
