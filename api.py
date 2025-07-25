@@ -1,21 +1,16 @@
-
-import uvicorn
 import pandas as pd
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-# from transformers import GPT2LMHeadModel, GPT2Tokenizer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import OneHotEncoder
-# import torch
-import joblib
+import requests
 
 app = FastAPI(title="ThermoSense ML + GPT-2 Advisory")
 
-# ========== Load Model Assets ==========
-print("Loading model and encoder...")
+# ========== Load Model and Encoder ==========
+print("🔧 Loading model and encoder...")
 
-# Load CSV for encoder fitting (simulate original training data)
 df = pd.read_csv("thermosense_test_data.csv")
 features = ["battery_temp", "ambient_temp", "device_state"]
 target = "measured_health_impact"
@@ -26,59 +21,20 @@ device_state_df = pd.DataFrame(device_state_encoded, columns=encoder.get_feature
 X = pd.concat([df[["battery_temp", "ambient_temp"]].reset_index(drop=True), device_state_df], axis=1)
 y = df[target]
 
-# Fit the model
 model = RandomForestRegressor(n_estimators=100, random_state=42)
 model.fit(X, y)
 
-# # GPT-2 setup
-# tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-# tokenizer.pad_token = tokenizer.eos_token
-# gpt2_model = GPT2LMHeadModel.from_pretrained("gpt2")
-# gpt2_model.eval()
-
-FEW_SHOT_PROMPT = """You are a battery safety advisor. Here are some examples:
-
-Report:
-- Battery temperature: 41.3°C
-- Ambient temperature: 38.0°C
-- Device state: Charging
-- Predicted battery health impact: 0.125
-Advice: Danger: Device is overheating while charging. Unplug it and let it cool down immediately!
-
-Report:
-- Battery temperature: 34.9°C
-- Ambient temperature: 28.5°C
-- Device state: Discharging
-- Predicted battery health impact: 0.019
-Advice: All clear: Device temperature is normal. Continue using as usual.
-
-Report:
-- Battery temperature: 38.5°C
-- Ambient temperature: 35.2°C
-- Device state: Idle
-- Predicted battery health impact: 0.087
-Advice: Warning: Battery is getting warm. Move device to cooler location and avoid heavy usage.
-
-Report:
-- Battery temperature: {battery_temp:.1f}°C
-- Ambient temperature: {ambient_temp:.1f}°C
-- Device state: {device_state}
-- Predicted battery health impact: {pred_impact:.3f}
-Advice:"""
-
-# ========== Input Schema ==========
+# ========== FastAPI Input Schema ==========
 class SensorInput(BaseModel):
     battery_temp: float
     ambient_temp: float
     device_state: str
 
 # ========== Helper Functions ==========
-import requests
-
 def generate_advice_with_gpt2(battery_temp, ambient_temp, device_state, pred_impact):
     try:
         response = requests.post(
-            "https://iRajVerma-thermosense-gradio.hf.space/run/predict",  # replace with your Space URL and endpoint
+            "https://iRajVerma-thermosense-gradio.hf.space/run/predict",  # your Hugging Face Space endpoint
             json={
                 "battery_temp": battery_temp,
                 "ambient_temp": ambient_temp,
@@ -103,7 +59,11 @@ def get_alert_level(impact):
     else:
         return "safe"
 
-# ========== API Endpoint ==========
+# ========== API Endpoints ==========
+@app.get("/")
+def home():
+    return {"message": "Welcome to ThermoSense Advisory API. Use POST /api/advice to get predictions."}
+
 @app.post("/api/advice")
 def get_advice(input: SensorInput):
     try:
@@ -115,9 +75,8 @@ def get_advice(input: SensorInput):
 
         impact = model.predict(X_live)[0]
         alert = get_alert_level(impact)
-        advice = generate_advice_with_gpt2(
-            input.battery_temp, input.ambient_temp, input.device_state, impact
-        )
+        advice = generate_advice_with_gpt2(input.battery_temp, input.ambient_temp, input.device_state, impact)
+
         action = None
         if alert == "danger":
             action = "Stop using device immediately and allow cooling"
@@ -130,9 +89,6 @@ def get_advice(input: SensorInput):
             "natural_language_tip": advice,
             "optional_action": action
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-# Uncomment if running directly
-# if __name__ == "__main__":
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
